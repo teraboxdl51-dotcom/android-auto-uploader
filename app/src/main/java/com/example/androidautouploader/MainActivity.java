@@ -1,21 +1,18 @@
 package com.example.androidautouploader;
 
-import android.Manifest;
+import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.Manifest;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
+public class MainActivity extends Activity {
 
-public class MainActivity extends AppCompatActivity {
-
-    private static final int PERMISSION_REQUEST = 100;
+    private static final int REQUEST_PERMISSION = 100;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -29,77 +26,57 @@ public class MainActivity extends AppCompatActivity {
         title.setText("Telegram Auto Uploader");
         title.setTextSize(24);
 
-        Button startButton = new Button(this);
-        startButton.setText("START AUTO UPLOAD");
+        Button start = new Button(this);
+        start.setText("START AUTO UPLOAD");
 
-        Button stopButton = new Button(this);
-        stopButton.setText("STOP AUTO UPLOAD");
+        Button stop = new Button(this);
+        stop.setText("STOP AUTO UPLOAD");
 
         layout.addView(title);
-        layout.addView(startButton);
-        layout.addView(stopButton);
+        layout.addView(start);
+        layout.addView(stop);
 
         setContentView(layout);
 
-        startButton.setOnClickListener(v -> {
-            if (hasVideoPermission()) {
-                startUploader();
-            } else {
-                requestVideoPermission();
-            }
-        });
+        start.setOnClickListener(v -> startUploader());
 
-        stopButton.setOnClickListener(v -> {
-            Intent intent = new Intent(this, UploadService.class);
+        stop.setOnClickListener(v -> {
+            Intent intent = new Intent(
+                    MainActivity.this,
+                    UploadService.class
+            );
             stopService(intent);
         });
     }
 
-    private boolean hasVideoPermission() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            return ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.READ_MEDIA_VIDEO
-            ) == PackageManager.PERMISSION_GRANTED;
-        }
-
-        return true;
-    }
-
-    private void requestVideoPermission() {
-        if (Build.VERSION.SDK_INT >= 33) {
-            ActivityCompat.requestPermissions(
-                    this,
-                    new String[]{
-                            Manifest.permission.READ_MEDIA_VIDEO
-                    },
-                    PERMISSION_REQUEST
-            );
-        }
-    }
-
     private void startUploader() {
-        Intent intent = new Intent(this, UploadService.class);
-        ContextCompat.startForegroundService(this, intent);
-    }
 
-    @Override
-    public void onRequestPermissionsResult(
-            int requestCode,
-            String[] permissions,
-            int[] grantResults
-    ) {
-        super.onRequestPermissionsResult(
-                requestCode,
-                permissions,
-                grantResults
+        if (Build.VERSION.SDK_INT >= 33) {
+
+            if (checkSelfPermission(
+                    Manifest.permission.READ_MEDIA_VIDEO
+            ) != PackageManager.PERMISSION_GRANTED) {
+
+                requestPermissions(
+                        new String[]{
+                                Manifest.permission.READ_MEDIA_VIDEO
+                        },
+                        REQUEST_PERMISSION
+                );
+
+                return;
+            }
+        }
+
+        Intent intent = new Intent(
+                this,
+                UploadService.class
         );
 
-        if (requestCode == PERMISSION_REQUEST &&
-                grantResults.length > 0 &&
-                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-
-            startUploader();
+        if (Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
         }
     }
 }
