@@ -1,14 +1,21 @@
 package com.example.androidautouploader;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 public class MainActivity extends AppCompatActivity {
+
+    private static final int PERMISSION_REQUEST = 100;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -35,13 +42,64 @@ public class MainActivity extends AppCompatActivity {
         setContentView(layout);
 
         startButton.setOnClickListener(v -> {
-            Intent intent = new Intent(this, UploadService.class);
-            startForegroundService(intent);
+            if (hasVideoPermission()) {
+                startUploader();
+            } else {
+                requestVideoPermission();
+            }
         });
 
         stopButton.setOnClickListener(v -> {
             Intent intent = new Intent(this, UploadService.class);
             stopService(intent);
         });
+    }
+
+    private boolean hasVideoPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.READ_MEDIA_VIDEO
+            ) == PackageManager.PERMISSION_GRANTED;
+        }
+
+        return true;
+    }
+
+    private void requestVideoPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String[]{
+                            Manifest.permission.READ_MEDIA_VIDEO
+                    },
+                    PERMISSION_REQUEST
+            );
+        }
+    }
+
+    private void startUploader() {
+        Intent intent = new Intent(this, UploadService.class);
+        ContextCompat.startForegroundService(this, intent);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(
+            int requestCode,
+            String[] permissions,
+            int[] grantResults
+    ) {
+        super.onRequestPermissionsResult(
+                requestCode,
+                permissions,
+                grantResults
+        );
+
+        if (requestCode == PERMISSION_REQUEST &&
+                grantResults.length > 0 &&
+                grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+
+            startUploader();
+        }
     }
 }
