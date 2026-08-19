@@ -1,82 +1,281 @@
 package com.example.androidautouploader;
 
-import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.Service;
+import android.content.ContentResolver;
+import android.content.ContentUris;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Build;
-import android.os.Bundle;
-import android.Manifest;
-import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.TextView;
+import android.os.Handler;
+import android.os.IBinder;
+import android.provider.MediaStore;
 
-public class MainActivity extends Activity {
+import androidx.annotation.Nullable;
+import androidx.core.app.NotificationCompat;
 
-    private static final int REQUEST_PERMISSION = 100;
+import java.io.BufferedInputStream;
+import java.io.DataOutputStream;
+import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+public class UploadService extends Service {
 
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(40, 60, 40, 40);
+    private static final String CHANNEL = "auto_upload";
 
-        TextView title = new TextView(this);
-        title.setText("Telegram Auto Uploader");
-        title.setTextSize(24);
+    private static final String RAILWAY_URL =
+            "https://telegram-auto-uploader-production.up.railway.app/upload";
 
-        Button start = new Button(this);
-        start.setText("START AUTO UPLOAD");
+    private final Handler handler = new Handler();
+    private boolean running = true;
 
-        Button stop = new Button(this);
-        stop.setText("STOP AUTO UPLOAD");
-
-        layout.addView(title);
-        layout.addView(start);
-        layout.addView(stop);
-
-        setContentView(layout);
-
-        start.setOnClickListener(v -> startUploader());
-
-        stop.setOnClickListener(v -> {
-            Intent intent = new Intent(
-                    MainActivity.this,
-                    UploadService.class
-            );
-            stopService(intent);
-        });
-    }
-
-    private void startUploader() {
-
-        if (Build.VERSION.SDK_INT >= 33) {
-
-            if (checkSelfPermission(
-                    Manifest.permission.READ_MEDIA_VIDEO
-            ) != PackageManager.PERMISSION_GRANTED) {
-
-                requestPermissions(
-                        new String[]{
-                                Manifest.permission.READ_MEDIA_VIDEO
-                        },
-                        REQUEST_PERMISSION
-                );
-
-                return;
+    private final Runnable scanner = new Runnable() {
+        @Override
+        public void run() {
+            if (running) {
+                scanAndUpload();
+                handler.postDelayed(this, 10000);
             }
         }
+    };
 
-        Intent intent = new Intent(
-                this,
-                UploadService.class
-        );
+    @Override
+    public void onCreate() {
+        super.onCreate();
 
-        if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
+        createNotificationChannel();
+
+        Notification notification =
+                new NotificationCompat.Builder(this, CHANNEL)
+                        .setContentTitle("Telegram Auto Uploader")
+                        .setContentText("Watching VideoDownloader...")
+                        .setSmallIcon(android.R.drawable.ic_menu_upload)
+                        .setOngoing(true)
+                        .build();
+
+        startForeground(1001, notification);
+
+        handler.post(scanner);
+    }
+
+    private void scanAndUpload() {
+
+        ContentResolver resolver = getContentResolver();
+
+        String[] projection = {
+                MediaStore.Video.Media._ID,
+                MediaStore.Video.Media.DISPLAY_NAME,
+                MediaStore.Video.Media.RELATIVE_PATH
+        };
+
+        String selection =
+                MediaStore.Video.Media.RELATIVE_PATH + " LIKE ?";
+
+        String[] args = {
+                "Download/VideoDownloader/%"
+        };
+
+        try (Cursor cursor = resolver.query(
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                args,
+                MediaStore.Video.Media.DATE_ADDED + " DESC"
+        )) {
+
+            if (cursor == null) {
+                return;
+            }
+
+            int idColumn =
+                    cursor.getColumnIndexOrThrow(
+                            MediaStore.Video.Media._ID
+                    );
+
+            int nameColumn =
+                    cursor.getColumnIndexOrThrow(
+                            MediaStore.Video.Media.DISPLAY_NAME
+                    );
+
+            while (cursor.moveToNext()) {
+
+                long id = cursor.getLong(idColumn);
+
+                String filename =
+                        cursor.getString(nameColumn);
+
+                Uri uri = ContentUris.withAppendedId(
+                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                        id
+                );
+
+                boolean uploaded =
+                        uploadFile(uri, filename);
+
+                // DELETE ONLY AFTER SUCCESS
+                if (uploaded) {
+                    resolver.delete(uri, null, null);
+                }
+            }
+
+        } catch (Exception ignored) {
         }
+    }
+
+    private boolean uploadFile(
+            Uri uri,
+            String filename
+    ) {
+
+        HttpURLConnection connection = null;
+
+        String boundary =
+                "----AutoUploaderBoundary";
+
+        try {
+
+            URL url =
+                    new URL(RAILWAY_URL);
+
+            connection =
+                    (HttpURLConnection)
+                            url.openConnection();
+
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setDoInput(true);
+
+            connection.setConnectTimeout(30000);
+            connection.setReadTimeout(3600000);
+
+            connection.setRequestProperty(
+                    "Content-Type",
+                    "multipart/form-data; boundary="
+                            + boundary
+            );
+
+            DataOutputStream output =
+                    new DataOutputStream(
+                            connection.getOutputStream()
+                    );
+
+            output.writeBytes(
+                    "--" + boundary + "\r\n"
+            );
+
+            output.writeBytes(
+                    "Content-Disposition: form-data; " +
+                    "name=\"file\"; filename=\"" +
+                    filename + "\"\r\n"
+            );
+
+            output.writeBytes(
+                    "Content-Type: application/octet-stream\r\n\r\n"
+            );
+
+            ContentResolver resolver =
+                    getContentResolver();
+
+            try (InputStream input =
+                         new BufferedInputStream(
+                                 resolver.openInputStream(uri)
+                         )) {
+
+                byte[] buffer =
+                        new byte[1024 * 1024];
+
+                int bytesRead;
+
+                while ((bytesRead =
+                        input.read(buffer)) != -1) {
+
+                    output.write(
+                            buffer,
+                            0,
+                            bytesRead
+                    );
+                }
+            }
+
+            output.writeBytes("\r\n");
+
+            output.writeBytes(
+                    "--" + boundary + "--\r\n"
+            );
+
+            output.flush();
+            output.close();
+
+            int responseCode =
+                    connection.getResponseCode();
+
+            return responseCode >= 200
+                    && responseCode < 300;
+
+        } catch (Exception e) {
+
+            return false;
+
+        } finally {
+
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private void createNotificationChannel() {
+
+        if (Build.VERSION.SDK_INT >=
+                Build.VERSION_CODES.O) {
+
+            NotificationChannel channel =
+                    new NotificationChannel(
+                            CHANNEL,
+                            "Telegram Auto Uploader",
+                            NotificationManager
+                                    .IMPORTANCE_LOW
+                    );
+
+            NotificationManager manager =
+                    getSystemService(
+                            NotificationManager.class
+                    );
+
+            if (manager != null) {
+                manager.createNotificationChannel(
+                        channel
+                );
+            }
+        }
+    }
+
+    @Override
+    public int onStartCommand(
+            Intent intent,
+            int flags,
+            int startId
+    ) {
+        return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+
+        running = false;
+
+        handler.removeCallbacks(scanner);
+
+        super.onDestroy();
+    }
+
+    @Nullable
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
     }
 }
