@@ -1,100 +1,35 @@
 package com.example.androidautouploader;
 
-import android.Manifest;
-import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.os.Build;
+import android.app.Activity;
 import android.os.Bundle;
+import android.graphics.Color;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-
-public class MainActivity extends AppCompatActivity {
-
-    private static final int REQUEST_NOTIFICATION = 100;
-    private static final int REQUEST_MEDIA = 101;
+public class MainActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
-
         super.onCreate(savedInstanceState);
 
-        /*
-         * Empty activity screen.
-         * This prevents the activity from immediately
-         * finishing/backing out.
-         */
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(40, 80, 40, 40);
 
-        if (Build.VERSION.SDK_INT >= 33) {
+        TextView title = new TextView(this);
 
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED) {
+        title.setText(
+                "Telegram Auto Uploader\n\n" +
+                "APP TEST MODE\n\n" +
+                "App opened successfully.\n\n" +
+                "Upload service is temporarily OFF."
+        );
 
-                ActivityCompat.requestPermissions(
-                        this,
-                        new String[]{
-                                Manifest.permission.POST_NOTIFICATIONS
-                        },
-                        REQUEST_NOTIFICATION
-                );
-            }
+        title.setTextSize(20);
+        title.setTextColor(Color.BLACK);
 
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.READ_MEDIA_VIDEO
-            ) != PackageManager.PERMISSION_GRANTED) {
+        layout.addView(title);
 
-                ActivityCompat.requestPermissions(
-                        this,
-                        new String[]{
-                                Manifest.permission.READ_MEDIA_VIDEO
-                        },
-                        REQUEST_MEDIA
-                );
-            }
-
-        } else {
-
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.READ_EXTERNAL_STORAGE
-            ) != PackageManager.PERMISSION_GRANTED) {
-
-                ActivityCompat.requestPermissions(
-                        this,
-                        new String[]{
-                                Manifest.permission.READ_EXTERNAL_STORAGE
-                        },
-                        REQUEST_MEDIA
-                );
-            }
-        }
-
-        startUploaderService();
-    }
-
-    private void startUploaderService() {
-
-        Intent intent =
-                new Intent(
-                        this,
-                        UploadService.class
-                );
-
-        if (Build.VERSION.SDK_INT >=
-                Build.VERSION_CODES.O) {
-
-            ContextCompat.startForegroundService(
-                    this,
-                    intent
-            );
-
-        } else {
-
-            startService(intent);
-        }
+        setContentView(layout);
     }
 }
