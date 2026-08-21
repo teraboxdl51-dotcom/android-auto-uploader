@@ -1,83 +1,84 @@
 package com.example.androidautouploader;
 
 import android.Manifest;
-import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.widget.TextView;
 
-public class MainActivity extends Activity {
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
-    private static final int PERMISSION_REQUEST = 100;
+public class MainActivity extends AppCompatActivity {
+
+    private static final int REQUEST_NOTIFICATION = 100;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        TextView textView = new TextView(this);
-        textView.setText(
-                "Auto Uploader\n\n" +
-                "Service is starting...\n\n" +
-                "Videos from Download / Movies will be uploaded automatically."
-        );
-        textView.setTextSize(18);
-        textView.setPadding(40, 80, 40, 40);
-        setContentView(textView);
-
-        requestPermissionsIfNeeded();
-    }
-
-    private void requestPermissionsIfNeeded() {
-
+        // Android 13+ notification permission
         if (Build.VERSION.SDK_INT >= 33) {
 
-            if (checkSelfPermission(
-                    Manifest.permission.READ_MEDIA_VIDEO
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED) {
 
-                requestPermissions(
+                ActivityCompat.requestPermissions(
+                        this,
                         new String[]{
-                                Manifest.permission.READ_MEDIA_VIDEO,
                                 Manifest.permission.POST_NOTIFICATIONS
                         },
-                        PERMISSION_REQUEST
+                        REQUEST_NOTIFICATION
                 );
-
-                return;
             }
         }
 
-        startUploader();
+        // Start upload service
+        startUploadService();
+
+        // Keep the app screen open
+        setContentView(
+                new android.widget.TextView(this) {{
+                    setText(
+                            "Auto Uploader\n\n" +
+                            "Watching:\n" +
+                            "Download/VideoDownloader/\n\n" +
+                            "Videos will upload automatically."
+                    );
+                    setTextSize(18);
+                    setPadding(30, 30, 30, 30);
+                }}
+        );
+    }
+
+    private void startUploadService() {
+
+        Intent intent =
+                new Intent(
+                        MainActivity.this,
+                        UploadService.class
+                );
+
+        if (Build.VERSION.SDK_INT >=
+                Build.VERSION_CODES.O) {
+
+            startForegroundService(intent);
+
+        } else {
+
+            startService(intent);
+        }
     }
 
     @Override
-    public void onRequestPermissionsResult(
-            int requestCode,
-            String[] permissions,
-            int[] grantResults
-    ) {
-        super.onRequestPermissionsResult(
-                requestCode,
-                permissions,
-                grantResults
-        );
+    protected void onDestroy() {
 
-        if (requestCode == PERMISSION_REQUEST) {
-            startUploader();
-        }
-    }
+        // DON'T stop UploadService here.
+        // Service must continue in background.
 
-    private void startUploader() {
-
-        Intent serviceIntent =
-                new Intent(this, UploadService.class);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent);
-        } else {
-            startService(serviceIntent);
-        }
+        super.onDestroy();
     }
 }
