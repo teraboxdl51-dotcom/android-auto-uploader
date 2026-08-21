@@ -711,7 +711,10 @@ public class UploadService extends Service {
                     "multipart/form-data; boundary="
                             + boundary
             );
-
+connection.setRequestProperty(
+        "X-API-Key",
+        "VyshakhUpload_2026_197dcfd8"
+);
             output =
                     new DataOutputStream(
                             connection
