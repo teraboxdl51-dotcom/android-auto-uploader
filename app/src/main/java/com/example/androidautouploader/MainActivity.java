@@ -1,27 +1,32 @@
 package com.example.androidautouploader;
 
+import android.app.Activity;
 import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 
-import androidx.appcompat.app.AppCompatActivity;
-
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        startUploaderService();
+    }
+
+    private void startUploaderService() {
+
+        Intent serviceIntent =
+                new Intent(this, UploadService.class);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(
-                    new Intent(this, UploadService.class)
-            );
+            startForegroundService(serviceIntent);
         } else {
-            startService(
-                    new Intent(this, UploadService.class)
-            );
+            startService(serviceIntent);
         }
 
+        // App screen close ചെയ്യാം,
+        // service background-ൽ തുടരാൻ ശ്രമിക്കും.
         finish();
     }
 }
