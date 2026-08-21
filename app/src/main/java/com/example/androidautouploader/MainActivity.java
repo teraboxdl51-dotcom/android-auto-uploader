@@ -2,15 +2,16 @@ package com.example.androidautouploader;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -40,8 +41,148 @@ public class MainActivity extends Activity {
     private Button resumeButton;
     private Button cancelButton;
 
+    private final BroadcastReceiver progressReceiver =
+            new BroadcastReceiver() {
+
+        @Override
+        public void onReceive(
+                Context context,
+                Intent intent
+        ) {
+
+            if (!UploadService.ACTION_PROGRESS.equals(
+                    intent.getAction())) {
+                return;
+            }
+
+            String filename =
+                    intent.getStringExtra(
+                            UploadService.EXTRA_FILENAME
+                    );
+
+            int progress =
+                    intent.getIntExtra(
+                            UploadService.EXTRA_PROGRESS,
+                            0
+                    );
+
+            long uploaded =
+                    intent.getLongExtra(
+                            UploadService.EXTRA_UPLOADED,
+                            0
+                    );
+
+            long total =
+                    intent.getLongExtra(
+                            UploadService.EXTRA_TOTAL,
+                            0
+                    );
+
+            String speed =
+                    intent.getStringExtra(
+                            UploadService.EXTRA_SPEED
+                    );
+
+            String status =
+                    intent.getStringExtra(
+                            UploadService.EXTRA_STATUS
+                    );
+
+            if (filename == null) {
+                filename = "Unknown file";
+            }
+
+            if (speed == null) {
+                speed = "0 B/s";
+            }
+
+            if (uploadText != null) {
+                uploadText.setText(
+                        "📤 " + filename
+                );
+            }
+
+            if (progressBar != null) {
+                progressBar.setProgress(
+                        Math.max(
+                                0,
+                                Math.min(
+                                        100,
+                                        progress
+                                )
+                        )
+                );
+            }
+
+            if (speedText != null) {
+                speedText.setText(
+                        "Speed: " + speed +
+                        "\nUploaded: " +
+                        formatSize(uploaded) +
+                        " / " +
+                        formatSize(total)
+                );
+            }
+
+            if (statusText != null) {
+
+                if ("uploading".equals(status)) {
+
+                    statusText.setText(
+                            "🟢 Uploading..."
+                    );
+
+                } else if ("paused".equals(status)) {
+
+                    statusText.setText(
+                            "⏸ Upload paused"
+                    );
+
+                } else if ("complete".equals(status)) {
+
+                    statusText.setText(
+                            "✅ Upload complete"
+                    );
+
+                } else if ("cancelled".equals(status)) {
+
+                    statusText.setText(
+                            "⛔ Upload cancelled"
+                    );
+
+                } else if ("failed".equals(status)) {
+
+                    statusText.setText(
+                            "🔴 Upload failed"
+                    );
+                }
+            }
+
+            if (pauseButton != null) {
+                pauseButton.setEnabled(
+                        "uploading".equals(status)
+                );
+            }
+
+            if (resumeButton != null) {
+                resumeButton.setEnabled(
+                        "paused".equals(status)
+                );
+            }
+
+            if (cancelButton != null) {
+                cancelButton.setEnabled(
+                        "uploading".equals(status) ||
+                        "paused".equals(status)
+                );
+            }
+        }
+    };
+
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    protected void onCreate(
+            Bundle savedInstanceState
+    ) {
 
         super.onCreate(savedInstanceState);
 
@@ -52,6 +193,28 @@ public class MainActivity extends Activity {
                 );
 
         createScreen();
+
+        IntentFilter progressFilter =
+                new IntentFilter(
+                        UploadService.ACTION_PROGRESS
+                );
+
+        if (Build.VERSION.SDK_INT >=
+                Build.VERSION_CODES.TIRAMISU) {
+
+            registerReceiver(
+                    progressReceiver,
+                    progressFilter,
+                    Context.RECEIVER_NOT_EXPORTED
+            );
+
+        } else {
+
+            registerReceiver(
+                    progressReceiver,
+                    progressFilter
+            );
+        }
 
         requestNotificationPermissionIfNeeded();
     }
@@ -292,8 +455,8 @@ public class MainActivity extends Activity {
                 new TextView(this);
 
         speedText.setText(
-                "Speed: --\n"
-                        + "Uploaded: -- / --"
+                "Speed: --\n" +
+                "Uploaded: -- / --"
         );
 
         speedText.setTextSize(16);
@@ -396,13 +559,13 @@ public class MainActivity extends Activity {
                 new TextView(this);
 
         info.setText(
-                "\nAutomatic mode:\n"
-                        + "🆕 New files only\n"
-                        + "🎬 Video\n"
-                        + "🖼️ Photo\n"
-                        + "📄 Document\n"
-                        + "📦 ZIP / other files\n"
-                        + "✅ Delete only after successful upload"
+                "\nAutomatic mode:\n" +
+                "🆕 New files only\n" +
+                "🎬 Video\n" +
+                "🖼️ Photo\n" +
+                "📄 Document\n" +
+                "📦 ZIP / other files\n" +
+                "✅ Delete only after successful upload"
         );
 
         info.setTextSize(15);
@@ -442,11 +605,11 @@ public class MainActivity extends Activity {
         intent.addFlags(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION
                         |
-                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                         |
-                        Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                         |
-                        Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
         );
 
         startActivityForResult(
@@ -500,7 +663,7 @@ public class MainActivity extends Activity {
                             uri,
                             Intent.FLAG_GRANT_READ_URI_PERMISSION
                                     |
-                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     );
 
         } catch (Exception e) {
@@ -663,6 +826,50 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================
+    // FORMAT SIZE
+    // =========================================================
+
+    private String formatSize(
+            long bytes
+    ) {
+
+        if (bytes < 1024) {
+
+            return bytes + " B";
+        }
+
+        double kb =
+                bytes / 1024.0;
+
+        if (kb < 1024) {
+
+            return String.format(
+                    "%.1f KB",
+                    kb
+            );
+        }
+
+        double mb =
+                kb / 1024.0;
+
+        if (mb < 1024) {
+
+            return String.format(
+                    "%.1f MB",
+                    mb
+            );
+        }
+
+        double gb =
+                mb / 1024.0;
+
+        return String.format(
+                "%.2f GB",
+                gb
+        );
+    }
+
+    // =========================================================
     // LAYOUT PARAMS
     // =========================================================
 
@@ -706,5 +913,24 @@ public class MainActivity extends Activity {
                 );
             }
         }
+    }
+
+    // =========================================================
+    // DESTROY
+    // =========================================================
+
+    @Override
+    protected void onDestroy() {
+
+        try {
+
+            unregisterReceiver(
+                    progressReceiver
+            );
+
+        } catch (Exception ignored) {
+        }
+
+        super.onDestroy();
     }
 }
