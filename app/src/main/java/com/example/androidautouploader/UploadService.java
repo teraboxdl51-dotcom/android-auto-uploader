@@ -24,6 +24,8 @@ import java.io.DataOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -32,11 +34,16 @@ public class UploadService extends Service {
     private static final String CHANNEL_ID =
             "telegram_auto_uploader";
 
-    private static final int NOTIFICATION_ID =
-            1001;
+    private static final int NOTIFICATION_ID = 1001;
 
     private static final String ACTION_CANCEL =
             "com.example.androidautouploader.CANCEL_UPLOAD";
+
+    private static final String ACTION_PAUSE =
+            "com.example.androidautouploader.PAUSE_UPLOAD";
+
+    private static final String ACTION_RESUME =
+            "com.example.androidautouploader.RESUME_UPLOAD";
 
     private static final String RAILWAY_URL =
             "https://telegram-auto-uploader-production.up.railway.app/upload";
@@ -51,7 +58,12 @@ public class UploadService extends Service {
 
     private volatile boolean uploading = false;
 
+    private volatile boolean paused = false;
+
     private volatile HttpURLConnection currentConnection;
+
+    private final Set<String> uploadedFiles =
+            new HashSet<>();
 
     private final Runnable scanner =
             new Runnable() {
@@ -64,6 +76,7 @@ public class UploadService extends Service {
                     }
 
                     if (!uploading &&
+                            !paused &&
                             !executor.isShutdown()) {
 
                         executor.execute(
@@ -72,9 +85,10 @@ public class UploadService extends Service {
                     }
 
                     if (running) {
+
                         handler.postDelayed(
                                 this,
-                                10000
+                                5000
                         );
                     }
                 }
@@ -91,22 +105,19 @@ public class UploadService extends Service {
 
         running = true;
 
+        paused = false;
+
         createNotificationChannel();
 
+        Notification notification =
+                createNotification(
+                        "Watching VideoDownloader...",
+                        0,
+                        false,
+                        false
+                );
+
         try {
-
-            Notification notification =
-                    createNotification(
-                            "Watching downloaded videos...",
-                            0,
-                            false
-                    );
-
-            /*
-             * IMPORTANT:
-             * Android 10+ supports foreground service type.
-             * Android 14+ requires the correct type.
-             */
 
             if (Build.VERSION.SDK_INT >=
                     Build.VERSION_CODES.Q) {
@@ -156,7 +167,7 @@ public class UploadService extends Service {
                     );
 
             channel.setDescription(
-                    "Automatic video upload status"
+                    "Automatic Telegram upload status"
             );
 
             NotificationManager manager =
@@ -180,7 +191,8 @@ public class UploadService extends Service {
     private Notification createNotification(
             String text,
             int progress,
-            boolean showProgress
+            boolean showProgress,
+            boolean pausedState
     ) {
 
         Intent cancelIntent =
@@ -196,7 +208,7 @@ public class UploadService extends Service {
         PendingIntent cancelPendingIntent =
                 PendingIntent.getService(
                         this,
-                        500,
+                        501,
                         cancelIntent,
                         PendingIntent.FLAG_UPDATE_CURRENT
                                 | PendingIntent.FLAG_IMMUTABLE
@@ -208,7 +220,8 @@ public class UploadService extends Service {
                         CHANNEL_ID
                 )
                         .setSmallIcon(
-                                android.R.drawable.ic_menu_upload
+                                android.R.drawable
+                                        .ic_menu_upload
                         )
                         .setContentTitle(
                                 "Telegram Auto Uploader"
@@ -235,6 +248,63 @@ public class UploadService extends Service {
                     false
             );
 
+            if (pausedState) {
+
+                Intent resumeIntent =
+                        new Intent(
+                                this,
+                                UploadService.class
+                        );
+
+                resumeIntent.setAction(
+                        ACTION_RESUME
+                );
+
+                PendingIntent resumePendingIntent =
+                        PendingIntent.getService(
+                                this,
+                                502,
+                                resumeIntent,
+                                PendingIntent.FLAG_UPDATE_CURRENT
+                                        | PendingIntent.FLAG_IMMUTABLE
+                        );
+
+                builder.addAction(
+                        android.R.drawable
+                                .ic_media_play,
+                        "RESUME",
+                        resumePendingIntent
+                );
+
+            } else {
+
+                Intent pauseIntent =
+                        new Intent(
+                                this,
+                                UploadService.class
+                        );
+
+                pauseIntent.setAction(
+                        ACTION_PAUSE
+                );
+
+                PendingIntent pausePendingIntent =
+                        PendingIntent.getService(
+                                this,
+                                503,
+                                pauseIntent,
+                                PendingIntent.FLAG_UPDATE_CURRENT
+                                        | PendingIntent.FLAG_IMMUTABLE
+                        );
+
+                builder.addAction(
+                        android.R.drawable
+                                .ic_media_pause,
+                        "PAUSE",
+                        pausePendingIntent
+                );
+            }
+
             builder.addAction(
                     android.R.drawable
                             .ic_menu_close_clear_cancel,
@@ -259,7 +329,8 @@ public class UploadService extends Service {
                 createNotification(
                         text,
                         progress,
-                        true
+                        true,
+                        paused
                 );
 
         NotificationManager manager =
@@ -284,8 +355,9 @@ public class UploadService extends Service {
 
         Notification notification =
                 createNotification(
-                        "Watching downloaded videos...",
+                        "Watching VideoDownloader...",
                         0,
+                        false,
                         false
                 );
 
@@ -319,7 +391,9 @@ public class UploadService extends Service {
                         .setContentTitle(
                                 "Telegram Auto Uploader"
                         )
-                        .setContentText(message)
+                        .setContentText(
+                                message
+                        )
                         .setOnlyAlertOnce(true)
                         .setOngoing(false)
                         .setPriority(
@@ -343,12 +417,15 @@ public class UploadService extends Service {
     }
 
     // =========================================================
-    // SCAN
+    // SCAN ALL FILE TYPES
     // =========================================================
 
     private void scanAndUpload() {
 
-        if (!running || uploading) {
+        if (!running ||
+                uploading ||
+                paused) {
+
             return;
         }
 
@@ -357,17 +434,21 @@ public class UploadService extends Service {
 
         String[] projection = {
 
-                MediaStore.Video.Media._ID,
+                MediaStore.Files.FileColumns._ID,
 
-                MediaStore.Video.Media.DISPLAY_NAME,
+                MediaStore.Files.FileColumns.DISPLAY_NAME,
 
-                MediaStore.Video.Media.RELATIVE_PATH,
+                MediaStore.Files.FileColumns.RELATIVE_PATH,
 
-                MediaStore.Video.Media.SIZE
+                MediaStore.Files.FileColumns.SIZE,
+
+                MediaStore.Files.FileColumns.DATE_MODIFIED,
+
+                MediaStore.Files.FileColumns.MIME_TYPE
         };
 
         String selection =
-                MediaStore.Video.Media.RELATIVE_PATH
+                MediaStore.Files.FileColumns.RELATIVE_PATH
                         + " LIKE ?";
 
         String[] selectionArgs = {
@@ -380,34 +461,50 @@ public class UploadService extends Service {
 
             cursor =
                     resolver.query(
-                            MediaStore.Video.Media
-                                    .EXTERNAL_CONTENT_URI,
+                            MediaStore.Files
+                                    .getContentUri(
+                                            "external"
+                                    ),
                             projection,
                             selection,
                             selectionArgs,
-                            MediaStore.Video.Media
-                                    .DATE_ADDED
-                                    + " DESC"
+                            MediaStore.Files.FileColumns
+                                    .DATE_MODIFIED
+                                    + " ASC"
                     );
 
             if (cursor == null) {
+
                 return;
             }
 
             int idColumn =
                     cursor.getColumnIndex(
-                            MediaStore.Video.Media._ID
+                            MediaStore.Files.FileColumns._ID
                     );
 
             int nameColumn =
                     cursor.getColumnIndex(
-                            MediaStore.Video.Media
+                            MediaStore.Files.FileColumns
                                     .DISPLAY_NAME
                     );
 
             int sizeColumn =
                     cursor.getColumnIndex(
-                            MediaStore.Video.Media.SIZE
+                            MediaStore.Files.FileColumns
+                                    .SIZE
+                    );
+
+            int modifiedColumn =
+                    cursor.getColumnIndex(
+                            MediaStore.Files.FileColumns
+                                    .DATE_MODIFIED
+                    );
+
+            int mimeColumn =
+                    cursor.getColumnIndex(
+                            MediaStore.Files.FileColumns
+                                    .MIME_TYPE
                     );
 
             if (idColumn < 0 ||
@@ -420,6 +517,7 @@ public class UploadService extends Service {
             while (
                     cursor.moveToNext()
                             && running
+                            && !paused
             ) {
 
                 long id =
@@ -437,12 +535,60 @@ public class UploadService extends Service {
                                 sizeColumn
                         );
 
+                long modified =
+                        modifiedColumn >= 0
+                                ? cursor.getLong(
+                                        modifiedColumn
+                                )
+                                : 0;
+
+                String mimeType =
+                        mimeColumn >= 0
+                                ? cursor.getString(
+                                        mimeColumn
+                                )
+                                : "application/octet-stream";
+
+                String fileKey =
+                        filename
+                                + "|"
+                                + totalSize
+                                + "|"
+                                + modified;
+
+                /*
+                 * Already uploaded successfully.
+                 */
+                synchronized (uploadedFiles) {
+
+                    if (uploadedFiles.contains(
+                            fileKey
+                    )) {
+
+                        continue;
+                    }
+                }
+
                 Uri uri =
                         ContentUris.withAppendedId(
-                                MediaStore.Video.Media
-                                        .EXTERNAL_CONTENT_URI,
+                                MediaStore.Files
+                                        .getContentUri(
+                                                "external"
+                                        ),
                                 id
                         );
+
+                /*
+                 * Give newly-created files a little time
+                 * to finish writing.
+                 */
+                if (!isFileReady(
+                        uri,
+                        totalSize
+                )) {
+
+                    continue;
+                }
 
                 uploading = true;
 
@@ -450,33 +596,64 @@ public class UploadService extends Service {
                         uploadFile(
                                 uri,
                                 filename,
+                                mimeType,
                                 totalSize
                         );
 
                 uploading = false;
 
                 if (!running) {
+
                     return;
                 }
 
                 if (result) {
 
-                    try {
+                    synchronized (uploadedFiles) {
 
-                        resolver.delete(
-                                uri,
-                                null,
-                                null
+                        uploadedFiles.add(
+                                fileKey
                         );
-
-                    } catch (Exception e) {
-                        e.printStackTrace();
                     }
 
-                    showResult(
-                            "✅ Upload complete: "
-                                    + filename
-                    );
+                    /*
+                     * Delete ONLY after successful upload.
+                     */
+                    try {
+
+                        int deleted =
+                                resolver.delete(
+                                        uri,
+                                        null,
+                                        null
+                                );
+
+                        if (deleted > 0) {
+
+                            showResult(
+                                    "✅ Uploaded + deleted: "
+                                            + filename
+                            );
+
+                        } else {
+
+                            showResult(
+                                    "✅ Uploaded: "
+                                            + filename
+                                            + " | Delete failed"
+                            );
+                        }
+
+                    } catch (Exception e) {
+
+                        e.printStackTrace();
+
+                        showResult(
+                                "✅ Uploaded: "
+                                        + filename
+                                        + " | Delete failed"
+                        );
+                    }
 
                     sleepSafe(1500);
 
@@ -502,8 +679,75 @@ public class UploadService extends Service {
         } finally {
 
             if (cursor != null) {
+
                 cursor.close();
             }
+        }
+    }
+
+    // =========================================================
+    // FILE READY CHECK
+    // =========================================================
+
+    private boolean isFileReady(
+            Uri uri,
+            long expectedSize
+    ) {
+
+        try {
+
+            ContentResolver resolver =
+                    getContentResolver();
+
+            long actualSize = 0;
+
+            try (
+                    InputStream input =
+                            resolver.openInputStream(
+                                    uri
+                            )
+            ) {
+
+                if (input == null) {
+
+                    return false;
+                }
+
+                byte[] buffer =
+                        new byte[64 * 1024];
+
+                int read;
+
+                while (
+                        (read =
+                                input.read(
+                                        buffer
+                                )) != -1
+                ) {
+
+                    actualSize += read;
+
+                    /*
+                     * No need to read huge files completely.
+                     * We only need to confirm the file is readable.
+                     */
+                    if (actualSize >=
+                            Math.min(
+                                    expectedSize,
+                                    1024L * 1024L
+                            )) {
+
+                        break;
+                    }
+                }
+            }
+
+            return expectedSize <= 0
+                    || actualSize > 0;
+
+        } catch (Exception e) {
+
+            return false;
         }
     }
 
@@ -514,13 +758,24 @@ public class UploadService extends Service {
     private boolean uploadFile(
             Uri uri,
             String filename,
+            String mimeType,
             long totalSize
     ) {
 
-        HttpURLConnection connection = null;
+        HttpURLConnection connection =
+                null;
 
         String boundary =
-                "----AutoUploaderBoundary123456";
+                "----AutoUploaderBoundary123456789";
+
+        long uploadStart =
+                System.currentTimeMillis();
+
+        long lastUpdateTime =
+                uploadStart;
+
+        long lastUploadedBytes =
+                0;
 
         try {
 
@@ -586,7 +841,13 @@ public class UploadService extends Service {
             );
 
             output.writeBytes(
-                    "Content-Type: video/mp4\r\n"
+                    "Content-Type: "
+                            + (
+                            mimeType != null
+                                    ? mimeType
+                                    : "application/octet-stream"
+                    )
+                            + "\r\n"
             );
 
             output.writeBytes(
@@ -631,6 +892,8 @@ public class UploadService extends Service {
                 while (
                         running
                                 &&
+                        !paused
+                                &&
                         (
                                 bytesRead =
                                         buffered.read(
@@ -648,73 +911,143 @@ public class UploadService extends Service {
                     uploadedBytes +=
                             bytesRead;
 
-                    int progress;
+                    long now =
+                            System.currentTimeMillis();
 
-                    if (totalSize > 0) {
+                    if (
+                            now -
+                                    lastUpdateTime
+                                    >=
+                                    500
+                    ) {
 
-                        progress =
-                                (int)
-                                        Math.min(
-                                                100,
-                                                (
-                                                        uploadedBytes
-                                                                * 100L
-                                                )
-                                                        / totalSize
-                                        );
+                        long deltaBytes =
+                                uploadedBytes
+                                        -
+                                        lastUploadedBytes;
 
-                    } else {
+                        long deltaTime =
+                                now -
+                                        lastUpdateTime;
 
-                        progress = 0;
-                    }
+                        double speed =
+                                deltaTime > 0
+                                        ? (
+                                        deltaBytes
+                                                * 1000.0
+                                )
+                                        / deltaTime
+                                        : 0;
 
-                    if (progress !=
-                            lastProgress) {
+                        int progress;
 
-                        lastProgress =
-                                progress;
+                        if (totalSize > 0) {
+
+                            progress =
+                                    (int)
+                                            Math.min(
+                                                    100,
+                                                    (
+                                                            uploadedBytes
+                                                                    * 100L
+                                                    )
+                                                            / totalSize
+                                            );
+
+                        } else {
+
+                            progress = 0;
+                        }
+
+                        String speedText =
+                                formatSpeed(
+                                        speed
+                                );
+
+                        String sizeText =
+                                formatSize(
+                                        uploadedBytes
+                                )
+                                        + " / "
+                                        + formatSize(
+                                        totalSize
+                                );
 
                         final int p =
                                 progress;
 
+                        final String status =
+                                "Uploading: "
+                                        + filename
+                                        + " • "
+                                        + p
+                                        + "% • "
+                                        + speedText
+                                        + " • "
+                                        + sizeText;
+
                         handler.post(
                                 () ->
                                         updateNotification(
-                                                "Uploading: "
-                                                        + filename
-                                                        + " • "
-                                                        + p
-                                                        + "%",
+                                                status,
                                                 p
                                         )
                         );
+
+                        lastUpdateTime =
+                                now;
+
+                        lastUploadedBytes =
+                                uploadedBytes;
+
+                        lastProgress =
+                                progress;
                     }
                 }
-            }
 
-            if (!running) {
+                /*
+                 * PAUSED
+                 */
+                if (paused) {
 
-                try {
-                    output.close();
-                } catch (Exception ignored) {
+                    try {
+                        output.close();
+                    } catch (Exception ignored) {
+                    }
+
+                    return false;
                 }
 
-                return false;
+                /*
+                 * CANCELLED / SERVICE STOPPED
+                 */
+                if (!running) {
+
+                    try {
+                        output.close();
+                    } catch (Exception ignored) {
+                    }
+
+                    return false;
+                }
+
+                /*
+                 * Finish multipart body.
+                 */
+                output.writeBytes(
+                        "\r\n"
+                );
+
+                output.writeBytes(
+                        "--"
+                                + boundary
+                                + "--\r\n"
+                );
+
+                output.flush();
+
+                output.close();
             }
-
-            output.writeBytes(
-                    "\r\n"
-            );
-
-            output.writeBytes(
-                    "--"
-                            + boundary
-                            + "--\r\n"
-            );
-
-            output.flush();
-
-            output.close();
 
             int responseCode =
                     connection
@@ -737,11 +1070,74 @@ public class UploadService extends Service {
             if (connection != null) {
 
                 try {
+
                     connection.disconnect();
+
                 } catch (Exception ignored) {
                 }
             }
         }
+    }
+
+    // =========================================================
+    // PAUSE
+    // =========================================================
+
+    private void pauseUpload() {
+
+        if (!uploading) {
+
+            return;
+        }
+
+        paused = true;
+
+        HttpURLConnection connection =
+                currentConnection;
+
+        if (connection != null) {
+
+            try {
+
+                connection.disconnect();
+
+            } catch (Exception ignored) {
+            }
+        }
+
+        updateNotification(
+                "⏸ Upload paused",
+                0
+        );
+    }
+
+    // =========================================================
+    // RESUME
+    // =========================================================
+
+    private void resumeUpload() {
+
+        if (!paused) {
+
+            return;
+        }
+
+        paused = false;
+
+        updateNotification(
+                "▶️ Resuming...",
+                0
+        );
+
+        /*
+         * Scanner will pick the file again.
+         * Because Railway does not currently provide
+         * resumable upload, the file is uploaded again
+         * from the beginning.
+         */
+        handler.post(
+                scanner
+        );
     }
 
     // =========================================================
@@ -751,6 +1147,8 @@ public class UploadService extends Service {
     private void cancelUpload() {
 
         running = false;
+
+        paused = false;
 
         uploading = false;
 
@@ -764,7 +1162,9 @@ public class UploadService extends Service {
         if (connection != null) {
 
             try {
+
                 connection.disconnect();
+
             } catch (Exception ignored) {
             }
         }
@@ -772,7 +1172,7 @@ public class UploadService extends Service {
         executor.shutdownNow();
 
         showResult(
-                "⛔ Upload cancelled"
+                "⛔ Upload cancelled — original kept"
         );
 
         if (Build.VERSION.SDK_INT >=
@@ -793,7 +1193,7 @@ public class UploadService extends Service {
     }
 
     // =========================================================
-    // START COMMAND
+    // COMMAND
     // =========================================================
 
     @Override
@@ -803,21 +1203,44 @@ public class UploadService extends Service {
             int startId
     ) {
 
-        if (intent != null &&
-                ACTION_CANCEL.equals(
-                        intent.getAction()
-                )) {
+        if (intent != null) {
 
-            cancelUpload();
+            String action =
+                    intent.getAction();
 
-            return START_NOT_STICKY;
+            if (ACTION_CANCEL.equals(
+                    action
+            )) {
+
+                cancelUpload();
+
+                return START_NOT_STICKY;
+            }
+
+            if (ACTION_PAUSE.equals(
+                    action
+            )) {
+
+                pauseUpload();
+
+                return START_STICKY;
+            }
+
+            if (ACTION_RESUME.equals(
+                    action
+            )) {
+
+                resumeUpload();
+
+                return START_STICKY;
+            }
         }
 
         return START_STICKY;
     }
 
     // =========================================================
-    // ANDROID 15+ DATA SYNC TIMEOUT
+    // TIMEOUT
     // =========================================================
 
     @Override
@@ -827,6 +1250,8 @@ public class UploadService extends Service {
     ) {
 
         running = false;
+
+        paused = false;
 
         uploading = false;
 
@@ -840,7 +1265,9 @@ public class UploadService extends Service {
         if (connection != null) {
 
             try {
+
                 connection.disconnect();
+
             } catch (Exception ignored) {
             }
         }
@@ -864,6 +1291,8 @@ public class UploadService extends Service {
 
         running = false;
 
+        paused = false;
+
         uploading = false;
 
         handler.removeCallbacks(
@@ -876,7 +1305,9 @@ public class UploadService extends Service {
         if (connection != null) {
 
             try {
+
                 connection.disconnect();
+
             } catch (Exception ignored) {
             }
         }
@@ -900,6 +1331,101 @@ public class UploadService extends Service {
     }
 
     // =========================================================
+    // FORMAT SPEED
+    // =========================================================
+
+    private String formatSpeed(
+            double bytesPerSecond
+    ) {
+
+        if (bytesPerSecond <
+                1024) {
+
+            return String.format(
+                    "%.0f B/s",
+                    bytesPerSecond
+            );
+        }
+
+        if (bytesPerSecond <
+                1024 * 1024) {
+
+            return String.format(
+                    "%.1f KB/s",
+                    bytesPerSecond
+                            / 1024.0
+            );
+        }
+
+        if (bytesPerSecond <
+                1024 * 1024 * 1024) {
+
+            return String.format(
+                    "%.1f MB/s",
+                    bytesPerSecond
+                            / (
+                            1024.0
+                                    * 1024.0
+                    )
+            );
+        }
+
+        return String.format(
+                "%.2f GB/s",
+                bytesPerSecond
+                        / (
+                        1024.0
+                                * 1024.0
+                                * 1024.0
+                )
+        );
+    }
+
+    // =========================================================
+    // FORMAT SIZE
+    // =========================================================
+
+    private String formatSize(
+            long bytes
+    ) {
+
+        if (bytes < 1024) {
+
+            return bytes + " B";
+        }
+
+        if (bytes <
+                1024L * 1024) {
+
+            return String.format(
+                    "%.1f KB",
+                    bytes / 1024.0
+            );
+        }
+
+        if (bytes <
+                1024L * 1024 * 1024) {
+
+            return String.format(
+                    "%.1f MB",
+                    bytes / (
+                            1024.0
+                                    * 1024.0
+                    )
+            );
+        }
+
+        return String.format(
+                "%.2f GB",
+                bytes / (
+                        1024.0
+                                * 1024.0
+                                * 1024.0
+                )
+        );
+    }
+
+    // =========================================================
     // SLEEP
     // =========================================================
 
@@ -919,4 +1445,4 @@ public class UploadService extends Service {
                     .interrupt();
         }
     }
-        }
+            }
