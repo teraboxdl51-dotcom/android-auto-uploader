@@ -15,6 +15,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.MediaStore;
+import android.content.pm.ServiceInfo;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -29,8 +30,7 @@ import java.util.concurrent.Executors;
 
 public class UploadService extends Service {
 
-    private static final String CHANNEL = "auto_upload";
-
+    private static final String CHANNEL_ID = "auto_upload";
     private static final int NOTIFICATION_ID = 1001;
 
     private static final String ACTION_CANCEL =
@@ -39,15 +39,18 @@ public class UploadService extends Service {
     private static final String RAILWAY_URL =
             "https://telegram-auto-uploader-production.up.railway.app/upload";
 
+    private static final String VIDEO_PATH =
+            "Download/VideoDownloader/%";
+
     private final Handler handler =
             new Handler(Looper.getMainLooper());
 
     private final ExecutorService executor =
             Executors.newSingleThreadExecutor();
 
-    private volatile boolean running = true;
-
+    private volatile boolean serviceRunning = true;
     private volatile boolean uploading = false;
+    private volatile boolean cancelRequested = false;
 
     private volatile HttpURLConnection currentConnection = null;
 
@@ -56,11 +59,11 @@ public class UploadService extends Service {
         @Override
         public void run() {
 
-            if (!running) {
+            if (!serviceRunning) {
                 return;
             }
 
-            if (!uploading) {
+            if (!uploading && !executor.isShutdown()) {
                 executor.execute(() -> scanAndUpload());
             }
 
@@ -70,45 +73,62 @@ public class UploadService extends Service {
 
     @Override
     public void onCreate() {
-
         super.onCreate();
 
         createNotificationChannel();
 
-        showWatchingNotification();
+        startForegroundSafely(
+                "Watching VideoDownloader..."
+        );
 
         handler.post(scanner);
     }
 
-    // ---------------------------------------------------------
-    // NOTIFICATION
-    // ---------------------------------------------------------
+    // =========================================================
+    // FOREGROUND SERVICE
+    // =========================================================
 
-    private void showWatchingNotification() {
+    private void startForegroundSafely(String text) {
 
         Notification notification =
-                buildNotification(
-                        "Watching VideoDownloader...",
-                        0,
+                createNotification(
+                        text,
                         false,
-                        false
+                        0
                 );
 
-        startForeground(
-                NOTIFICATION_ID,
-                notification
-        );
+        if (Build.VERSION.SDK_INT >= 34) {
+
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            );
+
+        } else {
+
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification
+            );
+        }
     }
 
-    private Notification buildNotification(
+    // =========================================================
+    // NOTIFICATION
+    // =========================================================
+
+    private Notification createNotification(
             String text,
-            int progress,
             boolean showProgress,
-            boolean uploadingNow
+            int progress
     ) {
 
         Intent cancelIntent =
-                new Intent(this, UploadService.class);
+                new Intent(
+                        this,
+                        UploadService.class
+                );
 
         cancelIntent.setAction(ACTION_CANCEL);
 
@@ -124,7 +144,7 @@ public class UploadService extends Service {
         NotificationCompat.Builder builder =
                 new NotificationCompat.Builder(
                         this,
-                        CHANNEL
+                        CHANNEL_ID
                 )
                         .setSmallIcon(
                                 android.R.drawable.ic_menu_upload
@@ -143,7 +163,10 @@ public class UploadService extends Service {
 
             builder.setProgress(
                     100,
-                    Math.max(0, Math.min(100, progress)),
+                    Math.max(
+                            0,
+                            Math.min(100, progress)
+                    ),
                     false
             );
 
@@ -152,49 +175,18 @@ public class UploadService extends Service {
                     "CANCEL",
                     cancelPendingIntent
             );
-
-        } else if (!uploadingNow) {
-
-            builder.setProgress(
-                    0,
-                    0,
-                    false
-            );
         }
 
         return builder.build();
     }
 
-    private void updateProgress(
-            String filename,
-            int progress
+    private void updateNotification(
+            String text
     ) {
 
-        if (!running) {
+        if (!serviceRunning) {
             return;
         }
-
-        String shortName = filename;
-
-        if (shortName.length() > 35) {
-            shortName =
-                    shortName.substring(
-                            0,
-                            32
-                    ) + "...";
-        }
-
-        Notification notification =
-                buildNotification(
-                        "Uploading: "
-                                + shortName
-                                + " • "
-                                + progress
-                                + "%",
-                        progress,
-                        true,
-                        true
-                );
 
         NotificationManager manager =
                 getSystemService(
@@ -205,7 +197,51 @@ public class UploadService extends Service {
 
             manager.notify(
                     NOTIFICATION_ID,
-                    notification
+                    createNotification(
+                            text,
+                            false,
+                            0
+                    )
+            );
+        }
+    }
+
+    private void updateProgress(
+            String filename,
+            int progress
+    ) {
+
+        if (!serviceRunning) {
+            return;
+        }
+
+        String name = filename;
+
+        if (name.length() > 30) {
+
+            name =
+                    name.substring(0, 27)
+                            + "...";
+        }
+
+        NotificationManager manager =
+                getSystemService(
+                        NotificationManager.class
+                );
+
+        if (manager != null) {
+
+            manager.notify(
+                    NOTIFICATION_ID,
+                    createNotification(
+                            "Uploading: "
+                                    + name
+                                    + " • "
+                                    + progress
+                                    + "%",
+                            true,
+                            progress
+                    )
             );
         }
     }
@@ -214,109 +250,80 @@ public class UploadService extends Service {
             String filename
     ) {
 
-        if (!running) {
-            return;
-        }
-
-        Notification notification =
-                buildSimpleNotification(
-                        "✅ Upload complete: "
-                                + filename
+        updateNotification(
+                "✅ Upload complete: "
+                        + filename
         );
 
-        NotificationManager manager =
-                getSystemService(
-                        NotificationManager.class
-                );
+        handler.postDelayed(
+                () -> {
 
-        if (manager != null) {
+                    if (serviceRunning &&
+                            !uploading) {
 
-            manager.notify(
-                    NOTIFICATION_ID,
-                    notification
-            );
-        }
+                        updateNotification(
+                                "Watching VideoDownloader..."
+                        );
+                    }
+
+                },
+                2000
+        );
     }
 
     private void showFailed(
             String filename
     ) {
 
-        if (!running) {
-            return;
-        }
-
-        Notification notification =
-                buildSimpleNotification(
-                        "❌ Upload failed: "
-                                + filename
+        updateNotification(
+                "❌ Upload failed: "
+                        + filename
         );
 
-        NotificationManager manager =
-                getSystemService(
-                        NotificationManager.class
-                );
+        handler.postDelayed(
+                () -> {
 
-        if (manager != null) {
+                    if (serviceRunning &&
+                            !uploading) {
 
-            manager.notify(
-                    NOTIFICATION_ID,
-                    notification
-            );
-        }
+                        updateNotification(
+                                "Watching VideoDownloader..."
+                        );
+                    }
+
+                },
+                3000
+        );
     }
 
     private void showCancelled() {
 
-        Notification notification =
-                buildSimpleNotification(
-                        "⛔ Upload cancelled"
-                );
+        updateNotification(
+                "⛔ Upload cancelled"
+        );
 
-        NotificationManager manager =
-                getSystemService(
-                        NotificationManager.class
-                );
+        handler.postDelayed(
+                () -> {
 
-        if (manager != null) {
+                    if (serviceRunning) {
 
-            manager.notify(
-                    NOTIFICATION_ID,
-                    notification
-            );
-        }
+                        updateNotification(
+                                "Watching VideoDownloader..."
+                        );
+                    }
+
+                },
+                1500
+        );
     }
 
-    private Notification buildSimpleNotification(
-            String text
-    ) {
-
-        return new NotificationCompat.Builder(
-                this,
-                CHANNEL
-        )
-                .setSmallIcon(
-                        android.R.drawable.ic_menu_upload
-                )
-                .setContentTitle(
-                        "Telegram Auto Uploader"
-                )
-                .setContentText(text)
-                .setOnlyAlertOnce(true)
-                .setOngoing(false)
-                .setPriority(
-                        NotificationCompat.PRIORITY_LOW
-                )
-                .build();
-    }
-
-    // ---------------------------------------------------------
-    // SCAN VIDEO DOWNLOADER
-    // ---------------------------------------------------------
+    // =========================================================
+    // SCAN
+    // =========================================================
 
     private void scanAndUpload() {
 
-        if (!running || uploading) {
+        if (!serviceRunning || uploading) {
             return;
         }
 
@@ -339,43 +346,52 @@ public class UploadService extends Service {
                         + " LIKE ?";
 
         String[] args = {
-                "Download/VideoDownloader/%"
+                VIDEO_PATH
         };
 
-        try (
-                Cursor cursor =
-                        resolver.query(
-                                MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-                                projection,
-                                selection,
-                                args,
-                                MediaStore.Video.Media.DATE_ADDED
-                                        + " DESC"
-                        )
-        ) {
+        Cursor cursor = null;
+
+        try {
+
+            cursor =
+                    resolver.query(
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+                            projection,
+                            selection,
+                            args,
+                            MediaStore.Video.Media.DATE_ADDED
+                                    + " DESC"
+                    );
 
             if (cursor == null) {
                 return;
             }
 
             int idColumn =
-                    cursor.getColumnIndexOrThrow(
+                    cursor.getColumnIndex(
                             MediaStore.Video.Media._ID
                     );
 
             int nameColumn =
-                    cursor.getColumnIndexOrThrow(
+                    cursor.getColumnIndex(
                             MediaStore.Video.Media.DISPLAY_NAME
                     );
 
             int sizeColumn =
-                    cursor.getColumnIndexOrThrow(
+                    cursor.getColumnIndex(
                             MediaStore.Video.Media.SIZE
                     );
 
+            if (idColumn < 0 ||
+                    nameColumn < 0 ||
+                    sizeColumn < 0) {
+
+                return;
+            }
+
             while (
                     cursor.moveToNext()
-                            && running
+                            && serviceRunning
             ) {
 
                 long id =
@@ -393,9 +409,10 @@ public class UploadService extends Service {
                                 id
                         );
 
+                cancelRequested = false;
                 uploading = true;
 
-                boolean uploaded =
+                boolean success =
                         uploadFile(
                                 uri,
                                 filename,
@@ -404,11 +421,18 @@ public class UploadService extends Service {
 
                 uploading = false;
 
-                if (!running) {
+                if (!serviceRunning) {
                     return;
                 }
 
-                if (uploaded) {
+                if (cancelRequested) {
+
+                    showCancelled();
+
+                    continue;
+                }
+
+                if (success) {
 
                     try {
 
@@ -423,45 +447,38 @@ public class UploadService extends Service {
 
                     showSuccess(filename);
 
-                    // Give notification time to show
-                    try {
-                        Thread.sleep(1500);
-                    } catch (InterruptedException ignored) {
-                    }
-
-                    if (running) {
-                        showWatchingNotification();
-                    }
-
                 } else {
 
-                    if (running) {
-
-                        showFailed(filename);
-
-                        try {
-                            Thread.sleep(1500);
-                        } catch (InterruptedException ignored) {
-                        }
-
-                        if (running) {
-                            showWatchingNotification();
-                        }
-                    }
+                    showFailed(filename);
                 }
             }
 
-        } catch (Exception ignored) {
+        } catch (Exception e) {
 
-            if (running) {
-                showWatchingNotification();
+            if (serviceRunning) {
+
+                updateNotification(
+                        "Watching VideoDownloader..."
+                );
             }
+
+        } finally {
+
+            if (cursor != null) {
+
+                try {
+                    cursor.close();
+                } catch (Exception ignored) {
+                }
+            }
+
+            uploading = false;
         }
     }
 
-    // ---------------------------------------------------------
+    // =========================================================
     // UPLOAD
-    // ---------------------------------------------------------
+    // =========================================================
 
     private boolean uploadFile(
             Uri uri,
@@ -488,7 +505,6 @@ public class UploadService extends Service {
             connection.setRequestMethod("POST");
 
             connection.setDoOutput(true);
-
             connection.setDoInput(true);
 
             connection.setConnectTimeout(
@@ -530,10 +546,10 @@ public class UploadService extends Service {
             ContentResolver resolver =
                     getContentResolver();
 
-            InputStream input =
+            InputStream rawInput =
                     resolver.openInputStream(uri);
 
-            if (input == null) {
+            if (rawInput == null) {
 
                 output.close();
 
@@ -541,9 +557,9 @@ public class UploadService extends Service {
             }
 
             try (
-                    BufferedInputStream bufferedInput =
+                    BufferedInputStream input =
                             new BufferedInputStream(
-                                    input
+                                    rawInput
                             )
             ) {
 
@@ -557,12 +573,11 @@ public class UploadService extends Service {
                 int lastProgress = -1;
 
                 while (
-                        running
+                        serviceRunning
+                                && !cancelRequested
                                 && (
                                 bytesRead =
-                                        bufferedInput.read(
-                                                buffer
-                                        )
+                                        input.read(buffer)
                         ) != -1
                 ) {
 
@@ -572,10 +587,9 @@ public class UploadService extends Service {
                             bytesRead
                     );
 
-                    uploadedBytes +=
-                            bytesRead;
+                    uploadedBytes += bytesRead;
 
-                    int progress;
+                    int progress = 0;
 
                     if (totalSize > 0) {
 
@@ -583,42 +597,40 @@ public class UploadService extends Service {
                                 (int)
                                         Math.min(
                                                 100,
-                                                (
-                                                        uploadedBytes
-                                                                * 100L
-                                                )
+                                                uploadedBytes
+                                                        * 100L
                                                         / totalSize
                                         );
-
-                    } else {
-
-                        progress = 0;
                     }
 
-                    if (
-                            progress != lastProgress
-                    ) {
+                    if (progress != lastProgress) {
 
                         lastProgress =
                                 progress;
 
-                        final int finalProgress =
+                        final int p =
                                 progress;
 
                         handler.post(
                                 () ->
                                         updateProgress(
                                                 filename,
-                                                finalProgress
+                                                p
                                         )
                         );
                     }
                 }
             }
 
-            if (!running) {
+            if (
+                    !serviceRunning
+                            || cancelRequested
+            ) {
 
-                output.close();
+                try {
+                    output.close();
+                } catch (Exception ignored) {
+                }
 
                 return false;
             }
@@ -634,7 +646,6 @@ public class UploadService extends Service {
             );
 
             output.flush();
-
             output.close();
 
             int responseCode =
@@ -653,20 +664,25 @@ public class UploadService extends Service {
 
             if (connection != null) {
 
-                connection.disconnect();
+                try {
+                    connection.disconnect();
+                } catch (Exception ignored) {
+                }
             }
         }
     }
 
-    // ---------------------------------------------------------
-    // CANCEL
-    // ---------------------------------------------------------
+    // =========================================================
+    // CANCEL CURRENT UPLOAD
+    // =========================================================
 
-    private void cancelUpload() {
+    private void cancelCurrentUpload() {
 
-        running = false;
+        if (!uploading) {
+            return;
+        }
 
-        uploading = false;
+        cancelRequested = true;
 
         HttpURLConnection connection =
                 currentConnection;
@@ -679,22 +695,18 @@ public class UploadService extends Service {
             }
         }
 
-        handler.removeCallbacks(scanner);
-
-        executor.shutdownNow();
-
         showCancelled();
 
-        stopForeground(
-                STOP_FOREGROUND_REMOVE
-        );
-
-        stopSelf();
+        /*
+         * IMPORTANT:
+         * Service is NOT stopped here.
+         * Watcher continues after cancellation.
+         */
     }
 
-    // ---------------------------------------------------------
-    // NOTIFICATION CHANNEL
-    // ---------------------------------------------------------
+    // =========================================================
+    // CHANNEL
+    // =========================================================
 
     private void createNotificationChannel() {
 
@@ -705,7 +717,7 @@ public class UploadService extends Service {
 
             NotificationChannel channel =
                     new NotificationChannel(
-                            CHANNEL,
+                            CHANNEL_ID,
                             "Telegram Auto Uploader",
                             NotificationManager
                                     .IMPORTANCE_LOW
@@ -729,9 +741,9 @@ public class UploadService extends Service {
         }
     }
 
-    // ---------------------------------------------------------
-    // SERVICE
-    // ---------------------------------------------------------
+    // =========================================================
+    // SERVICE COMMAND
+    // =========================================================
 
     @Override
     public int onStartCommand(
@@ -747,20 +759,24 @@ public class UploadService extends Service {
                 )
         ) {
 
-            cancelUpload();
+            cancelCurrentUpload();
 
-            return START_NOT_STICKY;
+            return START_STICKY;
         }
 
         return START_STICKY;
     }
 
+    // =========================================================
+    // DESTROY
+    // =========================================================
+
     @Override
     public void onDestroy() {
 
-        running = false;
+        serviceRunning = false;
 
-        uploading = false;
+        cancelRequested = true;
 
         handler.removeCallbacks(scanner);
 
@@ -788,4 +804,4 @@ public class UploadService extends Service {
 
         return null;
     }
-    }
+}
