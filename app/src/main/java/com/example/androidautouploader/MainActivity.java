@@ -13,12 +13,19 @@ import androidx.core.content.ContextCompat;
 public class MainActivity extends AppCompatActivity {
 
     private static final int REQUEST_NOTIFICATION = 100;
+    private static final int REQUEST_MEDIA = 101;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+
         super.onCreate(savedInstanceState);
 
-        // Android 13+ notification permission
+        /*
+         * Empty activity screen.
+         * This prevents the activity from immediately
+         * finishing/backing out.
+         */
+
         if (Build.VERSION.SDK_INT >= 33) {
 
             if (ContextCompat.checkSelfPermission(
@@ -34,51 +41,60 @@ public class MainActivity extends AppCompatActivity {
                         REQUEST_NOTIFICATION
                 );
             }
+
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.READ_MEDIA_VIDEO
+            ) != PackageManager.PERMISSION_GRANTED) {
+
+                ActivityCompat.requestPermissions(
+                        this,
+                        new String[]{
+                                Manifest.permission.READ_MEDIA_VIDEO
+                        },
+                        REQUEST_MEDIA
+                );
+            }
+
+        } else {
+
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.READ_EXTERNAL_STORAGE
+            ) != PackageManager.PERMISSION_GRANTED) {
+
+                ActivityCompat.requestPermissions(
+                        this,
+                        new String[]{
+                                Manifest.permission.READ_EXTERNAL_STORAGE
+                        },
+                        REQUEST_MEDIA
+                );
+            }
         }
 
-        // Start upload service
-        startUploadService();
-
-        // Keep the app screen open
-        setContentView(
-                new android.widget.TextView(this) {{
-                    setText(
-                            "Auto Uploader\n\n" +
-                            "Watching:\n" +
-                            "Download/VideoDownloader/\n\n" +
-                            "Videos will upload automatically."
-                    );
-                    setTextSize(18);
-                    setPadding(30, 30, 30, 30);
-                }}
-        );
+        startUploaderService();
     }
 
-    private void startUploadService() {
+    private void startUploaderService() {
 
         Intent intent =
                 new Intent(
-                        MainActivity.this,
+                        this,
                         UploadService.class
                 );
 
         if (Build.VERSION.SDK_INT >=
                 Build.VERSION_CODES.O) {
 
-            startForegroundService(intent);
+            ContextCompat.startForegroundService(
+                    this,
+                    intent
+            );
 
         } else {
 
             startService(intent);
         }
-    }
-
-    @Override
-    protected void onDestroy() {
-
-        // DON'T stop UploadService here.
-        // Service must continue in background.
-
-        super.onDestroy();
     }
 }
